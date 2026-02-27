@@ -1,0 +1,16 @@
+{
+  "name": "pixel-bombo",
+  "version": "1.0.0",
+  "main": "main.js",
+  "private": true,
+  "description": "Bombo pixelart que saca imágenes de una carpeta",
+  "scripts": {
+    "start": "electron .",
+    "start:web": "http-server . -p 5173 -c-1",
+    "start:web:open": "http-server . -p 5173 -c-1 -o /renderer/index.html"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "http-server": "^14.1.1"
+  }
+}

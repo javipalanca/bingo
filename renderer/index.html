@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Retrópolis · Bombo Pixel</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-badge" aria-hidden="true"></div>
+          <div class="brand-text">
+            <div class="brand-title">RETROPÓLIS</div>
+            <div class="brand-subtitle">Bombo Pixel · Sorteo de imágenes</div>
+          </div>
+        </div>
+
+        <div class="status">
+          <div class="status-item">
+            <span class="k">Carpeta</span>
+            <span class="v" id="folderLabel">—</span>
+          </div>
+          <div class="status-item">
+            <span class="k">Restantes</span>
+            <span class="v mono" id="remainingLabel">0</span>
+          </div>
+        </div>
+      </header>
+
+      <main class="stage">
+        <section class="machine">
+          <div class="machine-frame">
+            <div class="drum-area">
+              <div class="drum" id="drum">
+                <div class="drum-glass"></div>
+                <div class="drum-grid"></div>
+                <div class="drum-bumps" id="drumBumps"></div>
+                <div class="drum-pool" id="drumPool"></div>
+                <div class="drum-hub"></div>
+                <div class="drum-hatch" id="drumHatch"></div>
+                <div class="drum-shine"></div>
+              </div>
+
+              <div class="chute">
+                <div class="chute-label">SALIDA</div>
+                <div class="chute-slot" id="chuteSlot"></div>
+              </div>
+            </div>
+
+            <div class="controls">
+              <button class="btn" id="btnPickFolder">Elegir carpeta</button>
+              <button class="btn primary" id="btnSpin" disabled>
+                Girar bombo
+              </button>
+              <button class="btn accent" id="btnBall" disabled>
+                Sacar bola
+              </button>
+              <button class="btn danger" id="btnReset" disabled>
+                Reinicio
+              </button>
+
+              <div class="hint" id="hint">
+                Elige una carpeta con imágenes para empezar.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside class="reveal">
+          <div class="reveal-card">
+            <div class="reveal-head">
+              <div class="reveal-title"></div>
+              <div class="reveal-meta mono" id="pickedMeta">—</div>
+            </div>
+
+            <div class="reveal-body" id="revealBody">
+              <div class="placeholder">
+                <div class="pixel-icon" aria-hidden="true"></div>
+                <div class="placeholder-text">
+                  Aquí aparecerá la imagen cuando saques una bola.
+                </div>
+              </div>
+            </div>
+
+            <div
+              class="picked-list"
+              id="pickedList"
+              aria-label="Imágenes ya sacadas"
+            ></div>
+          </div>
+        </aside>
+      </main>
+
+      <footer class="footer">
+        <span class="mono">Tip:</span> Puedes “Girar bombo” varias veces para
+        dramatizar y luego “Sacar bola”.
+      </footer>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
