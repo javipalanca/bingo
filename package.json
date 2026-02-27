@@ -6,11 +6,9 @@
   "description": "Bombo pixelart que saca imágenes de una carpeta",
   "scripts": {
     "start": "electron .",
-    "start:web": "http-server . -p 5173 -c-1",
-    "start:web:open": "http-server . -p 5173 -c-1 -o /renderer/index.html"
+    "start:web": "python3 -m uvicorn backend.main:app --reload --port 5173"
   },
   "devDependencies": {
-    "electron": "^30.0.0",
-    "http-server": "^14.1.1"
+    "electron": "^30.0.0"
   }
 }

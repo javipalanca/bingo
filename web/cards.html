@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Generador de cartones · Retrópolis</title>
+    <style>
+      :root {
+        --bg: #0b0f17;
+        --panel: #121b2b;
+        --text: #e9eefc;
+        --muted: #9fb0d0;
+        --line: #27324a;
+        --primary: #6aa8ff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family:
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          Segoe UI,
+          Roboto,
+          Helvetica,
+          Arial;
+        background:
+          radial-gradient(
+            1100px 650px at 15% 10%,
+            rgba(106, 168, 255, 0.16),
+            transparent 60%
+          ),
+          var(--bg);
+        color: var(--text);
+      }
+      .wrap {
+        max-width: 760px;
+        margin: 40px auto;
+        padding: 0 16px;
+      }
+      .panel {
+        background: linear-gradient(
+          180deg,
+          rgba(255, 255, 255, 0.03),
+          rgba(255, 255, 255, 0.01)
+        );
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 14px;
+        padding: 18px;
+      }
+      h1 {
+        margin: 0 0 6px;
+        font-size: 24px;
+      }
+      .muted {
+        color: var(--muted);
+        margin-bottom: 18px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+      }
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 14px;
+      }
+      input,
+      select {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--text);
+        border-radius: 8px;
+      }
+      textarea {
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        background: rgba(0, 0, 0, 0.25);
+        color: var(--text);
+        border-radius: 8px;
+        min-height: 140px;
+        resize: vertical;
+        font-family: inherit;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      button {
+        margin-top: 16px;
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px solid rgba(106, 168, 255, 0.4);
+        border-radius: 8px;
+        background: linear-gradient(
+          180deg,
+          rgba(106, 168, 255, 0.22),
+          rgba(255, 255, 255, 0.06)
+        );
+        color: var(--text);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: progress;
+      }
+      .status {
+        margin-top: 12px;
+        color: var(--muted);
+        min-height: 20px;
+      }
+      .back {
+        color: var(--primary);
+        text-decoration: none;
+      }
+      @media (max-width: 700px) {
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <p><a class="back" href="/renderer/index.html">← Volver al bingo</a></p>
+      <div class="panel">
+        <h1>Generador de cartones</h1>
+        <div class="muted">
+          Por defecto usa números. Si quieres texto personalizado, escribe una
+          entrada por línea.
+        </div>
+
+        <form id="cardsForm">
+          <div class="grid">
+            <label>
+              Número de cartones
+              <input
+                id="num"
+                type="number"
+                min="1"
+                max="500"
+                value="50"
+                required
+              />
+            </label>
+            <label>
+              Tamaño (NxN)
+              <input
+                id="size"
+                type="number"
+                min="2"
+                max="7"
+                value="5"
+                required
+              />
+            </label>
+            <label>
+              Cartones por página
+              <select id="perPage">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="4" selected>4</option>
+                <option value="6">6</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+              </select>
+            </label>
+            <label>
+              Semilla (opcional)
+              <input id="seed" type="number" placeholder="vacío = aleatorio" />
+            </label>
+            <label style="grid-column: 1 / -1">
+              Nombre del archivo
+              <input id="filename" type="text" value="retropolis_bingo.pdf" />
+            </label>
+            <label style="grid-column: 1 / -1">
+              Entradas personalizadas (opcional, una por línea)
+              <textarea
+                id="entriesText"
+                placeholder="MARIO BROS&#10;PAC-MAN&#10;..."
+              ></textarea>
+            </label>
+          </div>
+
+          <div class="row">
+            <input id="cutGuides" type="checkbox" />
+            <label for="cutGuides">Incluir guías de corte</label>
+          </div>
+
+          <button id="submitBtn" type="submit">Generar PDF</button>
+          <div id="status" class="status"></div>
+        </form>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById("cardsForm");
+      const statusEl = document.getElementById("status");
+      const submitBtn = document.getElementById("submitBtn");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        submitBtn.disabled = true;
+        statusEl.textContent = "Generando PDF...";
+
+        const payload = {
+          num: Number(document.getElementById("num").value),
+          size: Number(document.getElementById("size").value),
+          per_page: Number(document.getElementById("perPage").value),
+          cut_guides: document.getElementById("cutGuides").checked,
+          filename: document.getElementById("filename").value,
+          entries_text: document.getElementById("entriesText").value,
+        };
+
+        const seedRaw = document.getElementById("seed").value;
+        if (seedRaw !== "") payload.seed = Number(seedRaw);
+
+        try {
+          const res = await fetch("/api/cards/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || "No se pudo generar el PDF");
+          }
+
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          const defaultName = payload.filename || "retropolis_bingo.pdf";
+          a.href = url;
+          a.download = defaultName.toLowerCase().endsWith(".pdf")
+            ? defaultName
+            : defaultName + ".pdf";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+          statusEl.textContent = "PDF generado correctamente.";
+        } catch (err) {
+          statusEl.textContent = err.message || "Error generando el PDF";
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

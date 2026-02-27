@@ -8,6 +8,7 @@ const pickedList = $("pickedList");
 const hint = $("hint");
 
 const btnPickFolder = $("btnPickFolder");
+const btnCards = $("btnCards");
 const btnSpin = $("btnSpin");
 const btnBall = $("btnBall");
 const btnReset = $("btnReset");
@@ -55,6 +56,9 @@ const PHYSICS = {
   pegBounce: 0.86,
   pegSlide: 150,
   pegPushout: 1.1,
+  pegColliderShrink: 1.6,
+  antiJamInward: 240,
+  antiJamTangential: 210,
   idleJitter: 24
 };
 
@@ -63,6 +67,15 @@ function setButtonsEnabled(ready) {
   btnSpin.disabled = disabled;
   btnBall.disabled = disabled;
   btnReset.disabled = disabled;
+}
+
+if (btnCards) {
+  btnCards.hidden = isElectron;
+  if (!isElectron) {
+    btnCards.addEventListener("click", () => {
+      window.location.href = "/cards";
+    });
+  }
 }
 
 function wait(ms) {
@@ -567,12 +580,17 @@ function updatePhysics(dt) {
       }
     }
 
+    let pegHitCount = 0;
+
     for (const peg of drumPegs) {
       const pdx = ball.x - peg.x;
       const pdy = ball.y - peg.y;
       const pdist = Math.hypot(pdx, pdy) || 0.0001;
-      const minPegDist = ball.r + peg.r;
+      const effectivePegR = Math.max(2.2, peg.r - PHYSICS.pegColliderShrink);
+      const minPegDist = ball.r + effectivePegR;
       if (pdist >= minPegDist) continue;
+
+      pegHitCount += 1;
 
       const pnx = pdx / pdist;
       const pny = pdy / pdist;
@@ -595,6 +613,32 @@ function updatePhysics(dt) {
       const slide = PHYSICS.pegSlide * (0.35 + spinIntensity) * dt;
       ball.vx += tnx * slide * spinDir;
       ball.vy += tny * slide * spinDir;
+    }
+
+    const bdx = ball.x - centerX;
+    const bdy = ball.y - centerY;
+    const bdist = Math.max(Math.hypot(bdx, bdy), 0.001);
+    const rimBand = limitRadius - ball.r - bdist;
+    const speed = Math.hypot(ball.vx, ball.vy);
+    const jammedAtRim = rimBand < 8;
+
+    if ((pegHitCount >= 2 && jammedAtRim) || (pegHitCount >= 1 && jammedAtRim && speed < 45)) {
+      const inx = -bdx / bdist;
+      const iny = -bdy / bdist;
+      const tx = -iny;
+      const ty = inx;
+      const spinDir = drumAngularVelocity >= 0 ? 1 : -1;
+
+      ball.vx += inx * PHYSICS.antiJamInward * dt;
+      ball.vy += iny * PHYSICS.antiJamInward * dt;
+      ball.vx += tx * PHYSICS.antiJamTangential * spinDir * dt;
+      ball.vy += ty * PHYSICS.antiJamTangential * spinDir * dt;
+      ball.vx += (Math.random() - 0.5) * 70 * dt;
+      ball.vy += (Math.random() - 0.5) * 70 * dt;
+
+      const retreat = Math.min(5, Math.max(2, ball.r * 0.45));
+      ball.x += inx * retreat;
+      ball.y += iny * retreat;
     }
   }
 
