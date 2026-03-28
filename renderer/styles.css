@@ -135,10 +135,46 @@ body{
 
 .stage{
   flex:1;
-  display:grid;
-  grid-template-columns: 1.1fr .9fr;
-  gap:14px;
+  display:flex;
+  gap:0;
   min-height: 0;
+}
+
+.machine,
+.reveal{
+  min-width: 0;
+}
+
+.gutter.gutter-horizontal{
+  width: 12px;
+  cursor: col-resize;
+  position: relative;
+  flex: 0 0 12px;
+}
+
+.gutter.gutter-horizontal::before{
+  content:"";
+  position:absolute;
+  left: 50%;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,.06));
+  border-radius: 2px;
+  opacity: .9;
+}
+
+.gutter.gutter-horizontal::after{
+  content:"";
+  position:absolute;
+  left: 50%;
+  top: 50%;
+  width: 6px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+  border-radius: 8px;
+  background: rgba(255,255,255,.12);
 }
 
 .machine-frame{
@@ -152,6 +188,7 @@ body{
   grid-template-columns: 1.2fr .8fr;
   gap:14px;
   min-height: 0;
+  container-type: inline-size;
 }
 
 .drum-area{
@@ -164,8 +201,9 @@ body{
 }
 
 .drum{
-  width: 430px;
-  height: 430px;
+  width: min(430px, 100%);
+  aspect-ratio: 1 / 1;
+  height: auto;
   position:relative;
   background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
   border: 2px solid rgba(255,255,255,.10);
@@ -309,7 +347,7 @@ body{
 
 /* chute */
 .chute{
-  width: 430px;
+  width: min(430px, 100%);
   padding: 12px;
   background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(0,0,0,.20));
   border: 1px solid rgba(255,255,255,.06);
@@ -379,6 +417,25 @@ body{
   flex-direction:column;
   gap:10px;
   justify-content:center;
+}
+
+@container (max-width: 980px){
+  .machine-frame{
+    grid-template-columns: 1fr;
+    align-content: start;
+  }
+
+  .drum-area{
+    order: 1;
+    width: 100%;
+  }
+
+  .controls{
+    order: 2;
+    width: min(100%, 430px);
+    margin: 2px auto 0;
+    justify-content: flex-start;
+  }
 }
 
 .btn{
@@ -486,6 +543,7 @@ body{
   transform: rotateX(-88deg) rotateZ(-4deg) scale(.08);
   opacity: 0;
   will-change: transform, opacity;
+  backface-visibility: hidden;
 }
 .paper-sheet.unfolding{
   animation: unfoldPaper 880ms cubic-bezier(.2,.82,.2,1) forwards;
@@ -543,6 +601,48 @@ body{
 .paper-flight.launch{
   opacity: 1;
   transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) scale(1) rotate(0deg);
+}
+
+.mail-flight{
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,.24);
+  outline: 1px solid rgba(0,0,0,.72);
+  background:
+    radial-gradient(circle at 30% 26%, rgba(255,255,255,.92), rgba(255,255,255,.35) 30%, rgba(255,255,255,.1) 54%, rgba(0,0,0,.28) 72%),
+    var(--img) center/cover no-repeat;
+  box-shadow: 0 12px 24px rgba(0,0,0,.42);
+  image-rendering: pixelated;
+  pointer-events: none;
+  z-index: 1300;
+  transform-origin: 50% 50%;
+  overflow: hidden;
+  will-change: transform, opacity, border-radius;
+  backface-visibility: hidden;
+  contain: layout paint style;
+}
+
+.mail-flight.envelope{
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,.05) 34%, rgba(0,0,0,.2)),
+    var(--img) center/cover no-repeat;
+}
+
+.mail-flight-flap{
+  position:absolute;
+  left: 8%;
+  top: 6%;
+  width: 84%;
+  height: 44%;
+  clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+  background: linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.16));
+  opacity: 0;
+  transform-origin: 50% 0%;
 }
 
 .folder-feed-layer{
@@ -642,6 +742,8 @@ body{
   box-shadow: 0 22px 60px rgba(0,0,0,.55);
   image-rendering: pixelated; /* if the image itself is pixelart */
   background: rgba(0,0,0,.20);
+  will-change: transform, opacity;
+  backface-visibility: hidden;
 }
 
 .footer{
@@ -651,6 +753,13 @@ body{
 }
 
 @media (max-width: 980px){
+  .stage{
+    flex-direction: column;
+    gap: 14px;
+  }
+  .gutter.gutter-horizontal{
+    display: none;
+  }
   .topbar-right{
     flex-direction: column;
     align-items: stretch;
