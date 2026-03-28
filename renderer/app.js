@@ -18,6 +18,7 @@ const drumHatch = $("drumHatch");
 const drumBumps = $("drumBumps");
 const drumPool = $("drumPool");
 const chuteSlot = $("chuteSlot");
+const stageEl = document.querySelector(".stage");
 const isElectron = Boolean(window.bomboAPI?.selectFolder);
 const webBlobUrlByFile = new WeakMap();
 
@@ -35,6 +36,10 @@ let spinPromise = null;
 let extracting = false;
 let loadingFolderAnimation = false;
 let spinIntensity = 0;
+let pixiDrum = null;
+let stageSplitInstance = null;
+
+const USE_PIXI_MATTER = Boolean(window.PIXI && window.Matter && window.PixiMatterDrum);
 
 let drumRotationDeg = 0;
 let drumAngularVelocity = 0;
@@ -69,6 +74,49 @@ function setButtonsEnabled(ready) {
   btnReset.disabled = disabled;
 }
 
+function setupStageSplit() {
+  if (!stageEl) return;
+
+  const shouldSplit = window.matchMedia("(min-width: 981px)").matches;
+
+  if (!window.Split || !shouldSplit) {
+    if (stageSplitInstance) {
+      stageSplitInstance.destroy();
+      stageSplitInstance = null;
+      const machine = stageEl.querySelector(":scope > .machine");
+      const reveal = stageEl.querySelector(":scope > .reveal");
+      if (machine) machine.style.width = "";
+      if (reveal) reveal.style.width = "";
+    }
+    return;
+  }
+
+  if (stageSplitInstance) return;
+
+  let persisted = null;
+  try {
+    persisted = JSON.parse(localStorage.getItem("bingo-stage-split") || "null");
+  } catch {
+    persisted = null;
+  }
+
+  const sizes = Array.isArray(persisted) && persisted.length === 2 ? persisted : [58, 42];
+
+  stageSplitInstance = window.Split([".stage > .machine", ".stage > .reveal"], {
+    sizes,
+    minSize: [560, 360],
+    gutterSize: 12,
+    snapOffset: 18,
+    cursor: "col-resize",
+    onDragEnd: (nextSizes) => {
+      try {
+        localStorage.setItem("bingo-stage-split", JSON.stringify(nextSizes));
+      } catch {
+      }
+    }
+  });
+}
+
 if (btnCards) {
   btnCards.hidden = isElectron;
   if (!isElectron) {
@@ -77,6 +125,8 @@ if (btnCards) {
     });
   }
 }
+
+setupStageSplit();
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -223,6 +273,21 @@ function ensurePhysicsLoop() {
   rafId = requestAnimationFrame(stepPhysics);
 }
 
+function ensurePixiMatterDrum() {
+  if (!USE_PIXI_MATTER || !drumPool) return null;
+  if (pixiDrum?.failed) return null;
+  if (!pixiDrum) {
+    pixiDrum = new window.PixiMatterDrum();
+    const maybePromise = pixiDrum.init(drumPool);
+    if (maybePromise?.catch) {
+      maybePromise.catch(() => {
+        pixiDrum.failed = true;
+      });
+    }
+  }
+  return pixiDrum;
+}
+
 function resetBag() {
   resetRoundState();
   initDrumPhysics();
@@ -231,6 +296,20 @@ function resetBag() {
 
 function renderDrumPool() {
   if (!drumPool) return;
+  const engine = ensurePixiMatterDrum();
+
+  if (engine) {
+    physicsBalls = [];
+    engine.setBalls(shuffle([...bag]), fileToURL, MAX_VISIBLE_BALLS);
+    setTimeout(() => {
+      if (!engine.failed && engine.getBallCount() > 0) return;
+      if (engine.failed) {
+        renderDrumPool();
+      }
+    }, 320);
+    return;
+  }
+
   drumPool.innerHTML = "";
 
   physicsBalls = [];
@@ -296,6 +375,12 @@ function renderDrumPool() {
 
 function refillVisiblePool() {
   if (!drumPool || !bag.length) return;
+
+  const engine = ensurePixiMatterDrum();
+  if (engine) {
+    engine.syncBag(bag, fileToURL, MAX_VISIBLE_BALLS);
+    return;
+  }
 
   const targetCount = Math.min(MAX_VISIBLE_BALLS, bag.length);
   if (physicsBalls.length >= targetCount) return;
@@ -423,7 +508,10 @@ function animateFolderIntoDrum(files) {
 
       layer.appendChild(token);
       token.addEventListener("animationend", () => {
-        if (!drumPool || physicsBalls.length >= shotCount) return;
+        if (!drumPool) return;
+
+        const engine = ensurePixiMatterDrum();
+        if (!engine && physicsBalls.length >= shotCount) return;
 
         const radius = Math.max(5.2, baseRadius * (0.84 + Math.random() * 0.32));
         let localX = endX - poolRect.left;
@@ -438,6 +526,11 @@ function animateFolderIntoDrum(files) {
           const ny = dy / Math.max(dist, 0.001);
           localX = poolCenterX + nx * maxDist;
           localY = poolCenterY + ny * maxDist;
+        }
+
+        if (engine) {
+          engine.addBall(fp, fileToURL, radius, MAX_VISIBLE_BALLS);
+          return;
         }
 
         const ballEl = document.createElement("div");
@@ -519,7 +612,15 @@ function stepPhysics(ts) {
 }
 
 function updatePhysics(dt) {
-  if (!physicsBalls.length || !drumPool) return;
+  if (!drumPool) return;
+
+  const engine = ensurePixiMatterDrum();
+  if (engine) {
+    engine.update(dt, spinIntensity, drumAngularVelocity, (drumRotationDeg * Math.PI) / 180);
+    return;
+  }
+
+  if (!physicsBalls.length) return;
 
   const poolRect = drumPool.getBoundingClientRect();
   const w = poolRect.width;
@@ -732,6 +833,45 @@ function openDrumHatchAndDrop(onDrop) {
       return;
     }
 
+    if (window.gsap) {
+      let dropped = false;
+      const safeDrop = () => {
+        if (dropped) return;
+        dropped = true;
+        if (onDrop) onDrop();
+      };
+
+      window.gsap.killTweensOf(drumHatch);
+      window.gsap.set(drumHatch, {
+        xPercent: -50,
+        rotateX: 0,
+        transformOrigin: "50% 0%"
+      });
+
+      window.gsap.timeline({
+        onComplete: () => {
+          resolve();
+        }
+      })
+        .to(drumHatch, {
+          duration: 0.24,
+          rotateX: 72,
+          ease: "power2.out",
+          onComplete: safeDrop
+        })
+        .to(drumHatch, {
+          duration: 0.38,
+          rotateX: 78,
+          ease: "none"
+        })
+        .to(drumHatch, {
+          duration: 0.28,
+          rotateX: 0,
+          ease: "power2.inOut"
+        });
+      return;
+    }
+
     drumHatch.classList.remove("open");
     void drumHatch.offsetWidth;
     drumHatch.classList.add("open");
@@ -767,10 +907,15 @@ function fileToURL(fp) {
 
   let normalized = fp.replaceAll("\\", "/");
   if (!normalized.startsWith("/")) normalized = "/" + normalized;
-  return "file://" + normalized;
+  return "file://" + encodeURI(normalized);
 }
 
 function pickBallNearestHatch() {
+  const engine = ensurePixiMatterDrum();
+  if (engine) {
+    return engine.pickBallNearestHatch();
+  }
+
   if (!physicsBalls.length || !drumPool) return null;
 
   const poolRect = drumPool.getBoundingClientRect();
@@ -800,16 +945,141 @@ function animateSelectedBallExit(ballObj) {
       return;
     }
 
-    const hatchX = drumPool.clientWidth / 2;
-    const hatchY = drumPool.clientHeight + ballObj.r + 22;
+    const engine = ensurePixiMatterDrum();
+    const poolRect = drumPool.getBoundingClientRect();
+    const hatchRect = drumHatch?.getBoundingClientRect();
+    const chuteRect = chuteSlot?.getBoundingClientRect();
 
-    ballObj.el.classList.add("exiting");
-    ballObj.el.style.transform = `translate(${hatchX - ballObj.r}px, ${hatchY - ballObj.r}px)`;
+    const r = Math.max(4, ballObj.r || 8);
+    const localX = typeof ballObj.x === "number" ? ballObj.x : drumPool.clientWidth / 2;
+    const localY = typeof ballObj.y === "number" ? ballObj.y : drumPool.clientHeight * 0.65;
 
-    setTimeout(() => {
+    const startX = poolRect.left + localX;
+    const startY = poolRect.top + localY;
+    const hatchX = hatchRect ? (hatchRect.left + hatchRect.width / 2) : (poolRect.left + poolRect.width / 2);
+    const hatchY = hatchRect ? (hatchRect.top + hatchRect.height * 0.78) : (poolRect.bottom + 10);
+    const chuteX = chuteRect ? (chuteRect.left + 22 + r) : hatchX;
+    const chuteY = chuteRect ? (chuteRect.top + 14 + r) : (hatchY + 60);
+
+    const flight = document.createElement("div");
+    flight.className = "drum-ball";
+    flight.style.position = "fixed";
+    flight.style.left = "0";
+    flight.style.top = "0";
+    flight.style.zIndex = "1300";
+    flight.style.pointerEvents = "none";
+    flight.style.width = `${r * 2}px`;
+    flight.style.height = `${r * 2}px`;
+    flight.style.setProperty("--img", `url('${fileToURL(ballObj.file)}')`);
+    document.body.appendChild(flight);
+
+    if (engine && ballObj.file) {
+      engine.removeBallByFile(ballObj.file);
+    }
+    if (!engine && ballObj.el) {
       ballObj.el.remove();
+    }
+
+    if (window.gsap) {
+      window.gsap.set(flight, {
+        x: startX - r,
+        y: startY - r,
+        scale: 1,
+        rotation: -4
+      });
+
+      window.gsap.timeline({
+        onComplete: () => {
+          flight.remove();
+          resolve();
+        }
+      })
+        .to(flight, {
+          duration: 0.33,
+          x: hatchX - r,
+          y: hatchY - r,
+          scale: 1.03,
+          rotation: 0,
+          ease: "power2.out"
+        })
+        .to(flight, {
+          duration: 0.5,
+          x: chuteX - r,
+          y: chuteY - r,
+          scale: 1,
+          ease: "power2.in"
+        });
+      return;
+    }
+
+    flight.style.transform = `translate(${startX - r}px, ${startY - r}px) scale(1)`;
+    flight.style.transition = "transform 360ms cubic-bezier(.2,.85,.25,1)";
+    requestAnimationFrame(() => {
+      flight.style.transform = `translate(${hatchX - r}px, ${hatchY - r}px) scale(1)`;
+      setTimeout(() => {
+        flight.style.transition = "transform 520ms cubic-bezier(.12,.62,.2,1)";
+        flight.style.transform = `translate(${chuteX - r}px, ${chuteY - r}px) scale(1)`;
+        setTimeout(() => {
+          flight.remove();
+          resolve();
+        }, 540);
+      }, 370);
+    });
+  });
+}
+
+function animateChuteBallLifecycle(ball) {
+  return new Promise((resolve) => {
+    if (!ball) {
       resolve();
-    }, 900);
+      return;
+    }
+
+    if (!window.gsap) {
+      requestAnimationFrame(() => ball.classList.add("pop"));
+      setTimeout(() => ball.classList.add("opening"), 520);
+      setTimeout(resolve, 1420);
+      return;
+    }
+
+    window.gsap.set(ball, {
+      y: -104,
+      x: 0,
+      scale: 0.9,
+      opacity: 0,
+      rotation: -8,
+      transformOrigin: "50% 50%"
+    });
+
+    window.gsap.timeline({ onComplete: resolve })
+      .to(ball, {
+        duration: 0.42,
+        y: 12,
+        opacity: 1,
+        scale: 1.04,
+        rotation: 0,
+        ease: "back.out(1.45)"
+      })
+      .to(ball, {
+        duration: 0.16,
+        y: 10,
+        scale: 1,
+        ease: "power2.out"
+      })
+      .to(ball, {
+        duration: 0.52,
+        y: 10,
+        scale: 1,
+        opacity: 1,
+        ease: "none"
+      })
+      .to(ball, {
+        duration: 0.34,
+        y: 6,
+        scale: 1.06,
+        opacity: 0.22,
+        ease: "power2.inOut"
+      }, "+=0.1");
   });
 }
 
@@ -830,7 +1100,7 @@ async function drawBall() {
 
   const selectedBall = pickBallNearestHatch();
   const selectedFile = selectedBall?.file || null;
-  if (selectedBall) {
+  if (selectedBall && !ensurePixiMatterDrum()) {
     physicsBalls = physicsBalls.filter((b) => b !== selectedBall);
   }
 
@@ -840,7 +1110,6 @@ async function drawBall() {
     clearChuteBall();
     ball = makeBallEl();
     chuteSlot.appendChild(ball);
-    requestAnimationFrame(() => ball.classList.add("pop"));
   });
 
   // pick image from the same physical ball that exited the hatch
@@ -862,61 +1131,127 @@ async function drawBall() {
 
   remainingLabel.textContent = String(bag.length);
 
-  // open ball effect then reveal
-  setTimeout(() => {
-    if (ball) ball.classList.add("opening");
-  }, 520);
+  await animateChuteBallLifecycle(ball);
 
-  setTimeout(() => {
-    revealPicked(picked).then(() => {
-      pickedHistory.push(picked);
-      renderPickedHistory();
-      extracting = false;
-      setButtonsEnabled(Boolean(allFiles.length));
-    });
-    hint.textContent = bag.length
-      ? "Imagen revelada. Puedes girar y sacar la siguiente."
-      : "Última imagen revelada. Pulsa «Reinicio» para volver a empezar.";
-  }, 1500);
+  await revealPicked(picked, ball);
+  pickedHistory.push(picked);
+  renderPickedHistory();
+  extracting = false;
+  setButtonsEnabled(Boolean(allFiles.length));
+  hint.textContent = bag.length
+    ? "Imagen revelada. Puedes girar y sacar la siguiente."
+    : "Última imagen revelada. Pulsa «Reinicio» para volver a empezar.";
 }
 
-function revealPicked(fp) {
-  const name = getFileName(fp);
-
-  //pickedMeta.textContent = name;
-
-  return animatePaperFromDrum(fp);
+function revealPicked(fp, sourceBallEl = null) {
+  return animateBallToReveal(fp, sourceBallEl);
 }
 
-function animatePaperFromDrum(fp) {
+function animateBallToReveal(fp, sourceBallEl) {
   return new Promise((resolve) => {
-    const sourceRect = drum.getBoundingClientRect();
+    const sourceRect = sourceBallEl?.getBoundingClientRect() || chuteSlot.getBoundingClientRect();
     const targetRect = revealBody.getBoundingClientRect();
     const fromX = sourceRect.left + sourceRect.width / 2;
-    const fromY = sourceRect.bottom - 26;
+    const fromY = sourceRect.top + sourceRect.height * 0.5;
     const toX = targetRect.left + targetRect.width / 2;
     const toY = targetRect.top + Math.min(targetRect.height * 0.42, 210);
 
     const flight = document.createElement("div");
-    flight.className = "paper-flight";
-    flight.style.left = `${fromX}px`;
-    flight.style.top = `${fromY}px`;
-    flight.style.setProperty("--dx", `${toX - fromX}px`);
-    flight.style.setProperty("--dy", `${toY - fromY}px`);
+    flight.className = "mail-flight";
+    flight.style.setProperty("--img", `url('${fileToURL(fp)}')`);
+    const flap = document.createElement("div");
+    flap.className = "mail-flight-flap";
+    flight.appendChild(flap);
 
     document.body.appendChild(flight);
-    requestAnimationFrame(() => {
-      flight.classList.add("launch");
+    if (sourceBallEl) sourceBallEl.style.opacity = "0";
+
+    const finish = () => {
+      revealPickedFinal(fp, flight).then(() => {
+        flight.remove();
+        resolve();
+      });
+    };
+
+    if (!window.gsap) {
+      flight.style.transform = `translate(${fromX - 39}px, ${fromY - 39}px)`;
+      requestAnimationFrame(() => {
+        flight.style.transition = "transform 620ms cubic-bezier(.2,.85,.2,1), opacity 260ms ease";
+        flight.style.transform = `translate(${toX - 39}px, ${toY - 39}px)`;
+        setTimeout(finish, 700);
+      });
+      return;
+    }
+
+    const envelopeW = Math.min(300, targetRect.width * 0.9);
+    const envelopeH = 186;
+
+    window.gsap.set(flight, {
+      width: envelopeW,
+      height: envelopeH,
+      x: fromX - envelopeW / 2,
+      y: fromY - envelopeH / 2,
+      rotation: -8,
+      scaleX: 78 / envelopeW,
+      scaleY: 78 / envelopeH,
+      opacity: 1,
+      borderRadius: 39,
+      transformOrigin: "50% 50%",
+      force3D: true
     });
 
-    setTimeout(() => {
-      flight.remove();
-      revealPickedFinal(fp).then(resolve);
-    }, 820);
+    const arcMidX = fromX + (toX - fromX) * 0.38;
+    const arcMidY = Math.min(fromY, toY) - 42;
+
+    const tl = window.gsap.timeline({ onComplete: finish });
+    tl.to(flight, {
+      duration: 0.56,
+      x: arcMidX - envelopeW / 2,
+      y: arcMidY - envelopeH / 2,
+      rotation: -2,
+      scaleX: (78 / envelopeW) * 1.04,
+      scaleY: (78 / envelopeH) * 1.04,
+      ease: "power1.out"
+    });
+
+    tl.to(flight, {
+      duration: 0.66,
+      x: toX - envelopeW / 2,
+      y: toY - envelopeH / 2,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      ease: "power2.inOut"
+    });
+
+    tl.add(() => flight.classList.add("envelope"), "-=0.3");
+
+    tl.to(flight, {
+      duration: 0.34,
+      borderRadius: 12,
+      ease: "power2.inOut"
+    }, "<");
+
+    tl.to(flap, {
+      duration: 0.34,
+      opacity: 0.86,
+      rotationX: -65,
+      ease: "power2.out"
+    }, "-=0.14");
+
+    tl.to(flight, {
+      duration: 0.12,
+      y: `-=${6}`,
+      ease: "sine.out"
+    }).to(flight, {
+      duration: 0.18,
+      y: `+=${6}`,
+      ease: "sine.in"
+    });
   });
 }
 
-function revealPickedFinal(fp) {
+function revealPickedFinal(fp, fromElement = null) {
   const url = fileToURL(fp);
   const name = getFileName(fp);
 
@@ -924,24 +1259,152 @@ function revealPickedFinal(fp) {
 
   const paperWrap = document.createElement("div");
   paperWrap.className = "paper-reveal";
+  if (window.gsap) {
+    paperWrap.style.perspective = "none";
+  }
 
   const paper = document.createElement("div");
-  paper.className = "paper-sheet unfolding";
+  paper.className = "paper-sheet";
 
   const img = document.createElement("img");
   img.className = "reveal-img";
   img.alt = name;
   img.src = url;
+  img.style.visibility = "visible";
+  img.style.opacity = "0";
 
   paper.appendChild(img);
   paperWrap.appendChild(paper);
   revealBody.appendChild(paperWrap);
 
   return new Promise((resolve) => {
-    paper.addEventListener("animationend", () => {
-      paper.classList.add("ready");
-      setTimeout(resolve, 360);
-    }, { once: true });
+    if (!window.gsap) {
+      paper.classList.add("unfolding");
+      paper.addEventListener("animationend", () => {
+        paper.classList.add("ready");
+        setTimeout(resolve, 360);
+      }, { once: true });
+      return;
+    }
+
+    window.gsap.set(img, { opacity: 0, scale: 0.985 });
+
+    if (fromElement) {
+      const fromRect = fromElement.getBoundingClientRect();
+      const toRect = paper.getBoundingClientRect();
+
+      const flap = fromElement.querySelector(".mail-flight-flap");
+
+      const dx = toRect.left - fromRect.left;
+      const dy = toRect.top - fromRect.top;
+      const sx = Math.max(0.01, toRect.width / Math.max(1, fromRect.width));
+      const sy = Math.max(0.01, toRect.height / Math.max(1, fromRect.height));
+
+      window.gsap.set(fromElement, {
+        left: fromRect.left,
+        top: fromRect.top,
+        width: fromRect.width,
+        height: fromRect.height,
+        x: 0,
+        y: 0,
+        scaleX: 1,
+        scaleY: 1,
+        margin: 0,
+        zIndex: 1310,
+        borderRadius: 12,
+        opacity: 1,
+        rotation: 0,
+        rotateX: 0,
+        rotateY: 0,
+        rotateZ: 0,
+        skewX: 0,
+        skewY: 0,
+        transformOrigin: "0% 0%",
+        force3D: true
+      });
+      window.gsap.set(paperWrap, { opacity: 1 });
+      window.gsap.set(paper, {
+        opacity: 0.01,
+        scale: 0.985,
+        x: 0,
+        y: 0,
+        rotation: 0,
+        rotateX: 0,
+        rotateY: 0,
+        rotateZ: 0,
+        skewX: 0,
+        skewY: 0,
+        transformOrigin: "50% 50%"
+      });
+
+      window.gsap.timeline({
+        onComplete: () => {
+          fromElement.remove();
+          resolve();
+        }
+      })
+        .to(fromElement, {
+          duration: 0.72,
+          x: dx,
+          y: dy,
+          scaleX: sx,
+          scaleY: sy,
+          borderRadius: 6,
+          ease: "power2.inOut"
+        })
+        .to(paper, {
+          duration: 0.42,
+          opacity: 1,
+          scale: 1,
+          ease: "power2.out"
+        }, "-=0.36")
+        .to(img, {
+          duration: 0.46,
+          opacity: 1,
+          scale: 1,
+          ease: "power2.out"
+        }, "-=0.34")
+        .to(fromElement, {
+          duration: 0.34,
+          opacity: 0,
+          ease: "power1.out"
+        }, "-=0.3")
+        .to(flap || fromElement, {
+          duration: 0.22,
+          opacity: 0,
+          ease: "power1.out"
+        }, "-=0.28");
+      return;
+    }
+
+    window.gsap.set(paper, {
+      opacity: 0,
+      scale: 0.85,
+      y: 18,
+      rotation: -1.2,
+      transformOrigin: "50% 50%"
+    });
+
+    window.gsap.timeline({ onComplete: resolve })
+      .to(paper, {
+        duration: 0.36,
+        opacity: 1,
+        scale: 1.01,
+        y: 0,
+        rotation: 0,
+        ease: "power2.out"
+      })
+      .to(paper, {
+        duration: 0.16,
+        scale: 1,
+        ease: "power1.out"
+      })
+      .to(img, {
+        duration: 0.26,
+        opacity: 1,
+        scale: 1,
+        ease: "power1.out"
+      }, "-=0.05");
   });
 }
 
@@ -981,10 +1444,21 @@ btnPickFolder.addEventListener("click", async () => {
   renderDrumBumps();
   ensurePhysicsLoop();
   clearChuteBall();
-  drumPool.innerHTML = "";
   physicsBalls = [];
 
+  const engine = ensurePixiMatterDrum();
+  if (engine) {
+    engine.clearBalls();
+  } else {
+    drumPool.innerHTML = "";
+  }
+
   await animateFolderIntoDrum(bag);
+
+  const engineAfterLoad = ensurePixiMatterDrum();
+  if (!engineAfterLoad || engineAfterLoad.getBallCount() === 0) {
+    renderDrumPool();
+  }
 
   loadingFolderAnimation = false;
   setButtonsEnabled(true);
@@ -1001,7 +1475,12 @@ btnReset.addEventListener("click", () => {
 });
 
 window.addEventListener("resize", () => {
+  setupStageSplit();
   if (!allFiles.length) return;
+  const engine = ensurePixiMatterDrum();
+  if (engine) {
+    engine.resize();
+  }
   renderDrumBumps();
   renderDrumPool();
 });
