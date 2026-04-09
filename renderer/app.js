@@ -39,75 +39,135 @@ let spinIntensity = 0;
 let pixiDrum = null;
 let stageSplitInstance = null;
 
-// ─── Persistencia de partida ─────────────────────────────────────────────────
+// ─── Persistencia de partida (IndexedDB para web, localStorage para Electron) ───
 const SAVE_KEY = "bingo-game-state";
+const IDB_NAME = "bingo-db";
+const IDB_STORE = "images";
+const IDB_VERSION = 1;
+
+let idb = null;
+
+function openIDB() {
+  return new Promise((resolve, reject) => {
+    if (idb) { resolve(idb); return; }
+    const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: "name" });
+      }
+    };
+    req.onsuccess = () => { idb = req.result; resolve(idb); };
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveImagesToIDB(files) {
+  if (isElectron) return;
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    const store = tx.objectStore(IDB_STORE);
+    store.clear();
+    for (const f of files) {
+      const blob = f instanceof Blob ? f : await fetch(fileToURL(f)).then(r => r.blob());
+      store.put({ name: f.name, blob, type: f.type || blob.type });
+    }
+    await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = rej; });
+  } catch {}
+}
+
+async function loadImagesFromIDB() {
+  if (isElectron) return [];
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const store = tx.objectStore(IDB_STORE);
+    return new Promise((resolve) => {
+      const req = store.getAll();
+      req.onsuccess = () => {
+        const records = req.result || [];
+        const files = records.map(r => new File([r.blob], r.name, { type: r.type }));
+        resolve(files);
+      };
+      req.onerror = () => resolve([]);
+    });
+  } catch { return []; }
+}
+
+async function clearIDB() {
+  if (isElectron) return;
+  try {
+    const db = await openIDB();
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).clear();
+  } catch {}
+}
 
 function saveGameState() {
   if (!allFiles.length) return;
   try {
-    const base = {
+    const state = {
       dir: folderLabel.textContent,
       bagNames: bag.map(getFileName),
       pickedNames: pickedHistory.map(getFileName),
       lastPickedName: lastPicked ? getFileName(lastPicked) : null,
+      allFileNames: allFiles.map(getFileName),
     };
-    const extra = isElectron
-      ? { allFiles, bag, pickedHistory, lastPicked }
-      : { allFileNames: allFiles.map(getFileName) };
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ ...base, ...extra }));
+    if (isElectron) {
+      state.allFiles = allFiles;
+      state.bag = bag;
+      state.pickedHistory = pickedHistory;
+      state.lastPicked = lastPicked;
+    }
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+    if (!isElectron) saveImagesToIDB(allFiles);
   } catch {}
 }
 
 function clearGameState() {
   try { localStorage.removeItem(SAVE_KEY); } catch {}
+  clearIDB();
 }
 
 function loadSavedState() {
   try { return JSON.parse(localStorage.getItem(SAVE_KEY) || "null"); } catch { return null; }
 }
 
-// Intenta restaurar estado guardado en la selección de carpeta.
-// Devuelve true si se restauró con éxito (modifica bag, pickedHistory, lastPicked).
-function tryMatchSavedState(saved, dir, files) {
-  if (!saved || saved.dir !== dir) return false;
-  try {
-    if (isElectron) {
-      const fileSet = new Set(files);
-      const restoredBag = (saved.bag || []).filter(f => fileSet.has(f));
-      const restoredHistory = (saved.pickedHistory || []).filter(f => fileSet.has(f));
-      if (restoredBag.length + restoredHistory.length === 0) return false;
-      bag = restoredBag;
-      pickedHistory = restoredHistory;
-      lastPicked = saved.lastPicked && fileSet.has(saved.lastPicked) ? saved.lastPicked : null;
-    } else {
-      const nameToFile = new Map(files.map(f => [getFileName(f), f]));
-      const restoredBag = (saved.bagNames || []).map(n => nameToFile.get(n)).filter(Boolean);
-      const restoredHistory = (saved.pickedNames || []).map(n => nameToFile.get(n)).filter(Boolean);
-      if (restoredBag.length + restoredHistory.length === 0) return false;
-      bag = restoredBag;
-      pickedHistory = restoredHistory;
-      lastPicked = saved.lastPickedName ? (nameToFile.get(saved.lastPickedName) || null) : null;
-    }
-    return true;
-  } catch { return false; }
+// Restaura el estado a partir de datos guardados + archivos (de IDB o Electron)
+function restoreStateFromFiles(saved, files) {
+  const nameToFile = new Map(files.map(f => [getFileName(f), f]));
+  allFiles = (saved.allFileNames || []).map(n => nameToFile.get(n)).filter(Boolean);
+  if (!allFiles.length) allFiles = files;
+  bag = (saved.bagNames || []).map(n => nameToFile.get(n)).filter(Boolean);
+  pickedHistory = (saved.pickedNames || []).map(n => nameToFile.get(n)).filter(Boolean);
+  lastPicked = saved.lastPickedName ? (nameToFile.get(saved.lastPickedName) || null) : null;
 }
 
-// Auto-restaura la partida en Electron (rutas disponibles sin re-seleccionar carpeta).
-async function tryRestoreElectronState() {
-  if (!isElectron) return;
+// Auto-restaura la partida al cargar la página
+async function tryAutoRestoreState() {
   const saved = loadSavedState();
-  if (!saved?.allFiles?.length) return;
+  if (!saved) return;
 
-  allFiles = saved.allFiles;
+  let files = [];
+  if (isElectron && saved.allFiles?.length) {
+    files = saved.allFiles;
+    allFiles = files;
+    bag = saved.bag || [];
+    pickedHistory = saved.pickedHistory || [];
+    lastPicked = saved.lastPicked || null;
+  } else if (!isElectron) {
+    files = await loadImagesFromIDB();
+    if (!files.length) return;
+    restoreStateFromFiles(saved, files);
+  }
+
+  if (!allFiles.length || (!bag.length && !pickedHistory.length)) return;
+
   folderLabel.textContent = saved.dir || "—";
-  const fileSet = new Set(allFiles);
-  bag = (saved.bag || []).filter(f => fileSet.has(f));
-  pickedHistory = (saved.pickedHistory || []).filter(f => fileSet.has(f));
-  lastPicked = saved.lastPicked && fileSet.has(saved.lastPicked) ? saved.lastPicked : null;
-
-  if (!bag.length && !pickedHistory.length) return;
-
   remainingLabel.textContent = String(bag.length);
+  pickedMeta.textContent = pickedHistory.length ? `${pickedHistory.length} / ${allFiles.length}` : "—";
+
   loadingFolderAnimation = true;
   setButtonsEnabled(false);
   hint.textContent = "Restaurando partida guardada…";
@@ -129,6 +189,7 @@ async function tryRestoreElectronState() {
   loadingFolderAnimation = false;
   setButtonsEnabled(true);
   if (pickedHistory.length) renderPickedHistory();
+  if (lastPicked) revealPickedFinal(lastPicked);
   hint.textContent = `Partida restaurada · ${bag.length} imagen(es) restante(s).`;
 }
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1532,20 +1593,10 @@ btnPickFolder.addEventListener("click", async () => {
     return;
   }
 
-  const saved = loadSavedState();
-  const isRestoring = tryMatchSavedState(saved, res.dir || "—", allFiles);
-
   loadingFolderAnimation = true;
   setButtonsEnabled(false);
-
-  if (!isRestoring) {
-    hint.textContent = "Cargando imágenes al bombo…";
-    resetRoundState();
-  } else {
-    hint.textContent = "Restaurando partida guardada…";
-    remainingLabel.textContent = String(bag.length);
-    pickedMeta.textContent = pickedHistory.length ? `${pickedHistory.length} / ${allFiles.length}` : "—";
-  }
+  hint.textContent = "Cargando imágenes al bombo…";
+  resetRoundState();
 
   renderDrumBumps();
   ensurePhysicsLoop();
@@ -1568,14 +1619,8 @@ btnPickFolder.addEventListener("click", async () => {
 
   loadingFolderAnimation = false;
   setButtonsEnabled(true);
-
-  if (isRestoring) {
-    if (pickedHistory.length) renderPickedHistory();
-    hint.textContent = `Partida restaurada · ${bag.length} imagen(es) restante(s).`;
-  } else {
-    hint.textContent = "Bombo cargado. Puedes girar y sacar bola.";
-    saveGameState();
-  }
+  hint.textContent = "Bombo cargado. Puedes girar y sacar bola.";
+  saveGameState();
 });
 
 btnSpin.addEventListener("click", startSpin);
@@ -1618,5 +1663,5 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// Restaurar automáticamente en Electron al arrancar (las rutas siguen disponibles)
-requestAnimationFrame(() => tryRestoreElectronState());
+// Restaurar automáticamente al arrancar (Electron usa rutas, Web usa IndexedDB)
+requestAnimationFrame(() => tryAutoRestoreState());
