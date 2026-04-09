@@ -39,6 +39,100 @@ let spinIntensity = 0;
 let pixiDrum = null;
 let stageSplitInstance = null;
 
+// ─── Persistencia de partida ─────────────────────────────────────────────────
+const SAVE_KEY = "bingo-game-state";
+
+function saveGameState() {
+  if (!allFiles.length) return;
+  try {
+    const base = {
+      dir: folderLabel.textContent,
+      bagNames: bag.map(getFileName),
+      pickedNames: pickedHistory.map(getFileName),
+      lastPickedName: lastPicked ? getFileName(lastPicked) : null,
+    };
+    const extra = isElectron
+      ? { allFiles, bag, pickedHistory, lastPicked }
+      : { allFileNames: allFiles.map(getFileName) };
+    localStorage.setItem(SAVE_KEY, JSON.stringify({ ...base, ...extra }));
+  } catch {}
+}
+
+function clearGameState() {
+  try { localStorage.removeItem(SAVE_KEY); } catch {}
+}
+
+function loadSavedState() {
+  try { return JSON.parse(localStorage.getItem(SAVE_KEY) || "null"); } catch { return null; }
+}
+
+// Intenta restaurar estado guardado en la selección de carpeta.
+// Devuelve true si se restauró con éxito (modifica bag, pickedHistory, lastPicked).
+function tryMatchSavedState(saved, dir, files) {
+  if (!saved || saved.dir !== dir) return false;
+  try {
+    if (isElectron) {
+      const fileSet = new Set(files);
+      const restoredBag = (saved.bag || []).filter(f => fileSet.has(f));
+      const restoredHistory = (saved.pickedHistory || []).filter(f => fileSet.has(f));
+      if (restoredBag.length + restoredHistory.length === 0) return false;
+      bag = restoredBag;
+      pickedHistory = restoredHistory;
+      lastPicked = saved.lastPicked && fileSet.has(saved.lastPicked) ? saved.lastPicked : null;
+    } else {
+      const nameToFile = new Map(files.map(f => [getFileName(f), f]));
+      const restoredBag = (saved.bagNames || []).map(n => nameToFile.get(n)).filter(Boolean);
+      const restoredHistory = (saved.pickedNames || []).map(n => nameToFile.get(n)).filter(Boolean);
+      if (restoredBag.length + restoredHistory.length === 0) return false;
+      bag = restoredBag;
+      pickedHistory = restoredHistory;
+      lastPicked = saved.lastPickedName ? (nameToFile.get(saved.lastPickedName) || null) : null;
+    }
+    return true;
+  } catch { return false; }
+}
+
+// Auto-restaura la partida en Electron (rutas disponibles sin re-seleccionar carpeta).
+async function tryRestoreElectronState() {
+  if (!isElectron) return;
+  const saved = loadSavedState();
+  if (!saved?.allFiles?.length) return;
+
+  allFiles = saved.allFiles;
+  folderLabel.textContent = saved.dir || "—";
+  const fileSet = new Set(allFiles);
+  bag = (saved.bag || []).filter(f => fileSet.has(f));
+  pickedHistory = (saved.pickedHistory || []).filter(f => fileSet.has(f));
+  lastPicked = saved.lastPicked && fileSet.has(saved.lastPicked) ? saved.lastPicked : null;
+
+  if (!bag.length && !pickedHistory.length) return;
+
+  remainingLabel.textContent = String(bag.length);
+  loadingFolderAnimation = true;
+  setButtonsEnabled(false);
+  hint.textContent = "Restaurando partida guardada…";
+
+  renderDrumBumps();
+  ensurePhysicsLoop();
+  clearChuteBall();
+  physicsBalls = [];
+
+  const engine = ensurePixiMatterDrum();
+  if (engine) engine.clearBalls();
+  else if (drumPool) drumPool.innerHTML = "";
+
+  await animateFolderIntoDrum(bag);
+
+  const engineAfterLoad = ensurePixiMatterDrum();
+  if (!engineAfterLoad || engineAfterLoad.getBallCount() === 0) renderDrumPool();
+
+  loadingFolderAnimation = false;
+  setButtonsEnabled(true);
+  if (pickedHistory.length) renderPickedHistory();
+  hint.textContent = `Partida restaurada · ${bag.length} imagen(es) restante(s).`;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 const USE_PIXI_MATTER = Boolean(window.PIXI && window.Matter && window.PixiMatterDrum);
 
 let drumRotationDeg = 0;
@@ -1136,6 +1230,7 @@ async function drawBall() {
   await revealPicked(picked, ball);
   pickedHistory.push(picked);
   renderPickedHistory();
+  saveGameState();
   extracting = false;
   setButtonsEnabled(Boolean(allFiles.length));
   hint.textContent = bag.length
@@ -1437,10 +1532,21 @@ btnPickFolder.addEventListener("click", async () => {
     return;
   }
 
+  const saved = loadSavedState();
+  const isRestoring = tryMatchSavedState(saved, res.dir || "—", allFiles);
+
   loadingFolderAnimation = true;
   setButtonsEnabled(false);
-  hint.textContent = "Cargando imágenes al bombo…";
-  resetRoundState();
+
+  if (!isRestoring) {
+    hint.textContent = "Cargando imágenes al bombo…";
+    resetRoundState();
+  } else {
+    hint.textContent = "Restaurando partida guardada…";
+    remainingLabel.textContent = String(bag.length);
+    pickedMeta.textContent = pickedHistory.length ? `${pickedHistory.length} / ${allFiles.length}` : "—";
+  }
+
   renderDrumBumps();
   ensurePhysicsLoop();
   clearChuteBall();
@@ -1462,7 +1568,14 @@ btnPickFolder.addEventListener("click", async () => {
 
   loadingFolderAnimation = false;
   setButtonsEnabled(true);
-  hint.textContent = "Bombo cargado. Puedes girar y sacar bola.";
+
+  if (isRestoring) {
+    if (pickedHistory.length) renderPickedHistory();
+    hint.textContent = `Partida restaurada · ${bag.length} imagen(es) restante(s).`;
+  } else {
+    hint.textContent = "Bombo cargado. Puedes girar y sacar bola.";
+    saveGameState();
+  }
 });
 
 btnSpin.addEventListener("click", startSpin);
@@ -1472,6 +1585,7 @@ btnReset.addEventListener("click", () => {
   if (!allFiles.length) return;
   clearChuteBall();
   resetBag();
+  clearGameState();
 });
 
 window.addEventListener("resize", () => {
@@ -1500,5 +1614,9 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     clearChuteBall();
     resetBag();
+    clearGameState();
   }
 });
+
+// Restaurar automáticamente en Electron al arrancar (las rutas siguen disponibles)
+requestAnimationFrame(() => tryRestoreElectronState());

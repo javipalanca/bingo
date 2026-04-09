@@ -2,6 +2,15 @@ const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 
+// Log de errores al fichero para diagnosticar fallos en Windows
+const logFile = path.join(app.getPath("userData"), "error.log");
+process.on("uncaughtException", (err) => {
+  fs.appendFileSync(logFile, `[${new Date().toISOString()}] UNCAUGHT: ${err.stack}\n`);
+});
+process.on("unhandledRejection", (reason) => {
+  fs.appendFileSync(logFile, `[${new Date().toISOString()}] UNHANDLED: ${reason}\n`);
+});
+
 function isImageFile(name) {
   const ext = path.extname(name).toLowerCase();
   return [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"].includes(ext);
@@ -12,7 +21,7 @@ function createWindow() {
     width: 1200,
     height: 760,
     backgroundColor: "#0b0f17",
-    titleBarStyle: "hiddenInset",
+    titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "default",
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -24,11 +33,18 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  createWindow();
+  try {
+    createWindow();
+  } catch (err) {
+    fs.appendFileSync(logFile, `[${new Date().toISOString()}] CREATE_WINDOW: ${err.stack}\n`);
+    dialog.showErrorBox("Error al iniciar", err.message);
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+}).catch((err) => {
+  fs.appendFileSync(logFile, `[${new Date().toISOString()}] APP_READY: ${err.stack}\n`);
 });
 
 app.on("window-all-closed", () => {
